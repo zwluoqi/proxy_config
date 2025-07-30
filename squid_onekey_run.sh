@@ -63,8 +63,8 @@ install_squid() {
     print_status "Installing Squid proxy server..."
     
     if [[ "$OS" == *"Ubuntu"* ]] || [[ "$OS" == *"Debian"* ]]; then
-        apt-get update
-        apt-get install -y squid
+        sudo apt-get update
+        sudo apt-get install -y squid
         SQUID_CONFIG="/etc/squid/squid.conf"
         SQUID_SERVICE="squid"
     elif [[ "$OS" == *"CentOS"* ]] || [[ "$OS" == *"Red Hat"* ]] || [[ "$OS" == *"Rocky"* ]] || [[ "$OS" == *"AlmaLinux"* ]]; then
