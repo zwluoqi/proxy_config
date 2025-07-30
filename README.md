@@ -24,7 +24,7 @@
 ### 方法一：直接从 GitHub 下载并执行
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_USERNAME/proxy_config/main/squid_onekey_run.sh | sudo bash
+curl -fsSL https://github.com/zwluoqi/proxy_config/main/squid_onekey_run.sh | sudo bash
 ```
 
 ### 方法二：下载后执行

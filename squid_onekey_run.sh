@@ -200,8 +200,8 @@ start_squid() {
     print_status "Starting Squid service..."
     
     # Enable and start the service
-    systemctl enable "$SQUID_SERVICE"
-    systemctl start "$SQUID_SERVICE"
+    # systemctl enable "$SQUID_SERVICE"
+    sudo systemctl restart "$SQUID_SERVICE"
     
     # Wait a moment for service to start
     sleep 3
