@@ -60,38 +60,36 @@ detect_os() {
 
 # Install Squid based on OS
 install_squid() {
+    # Set config path first (needed even if already installed)
+    SQUID_CONFIG="/etc/squid/squid.conf"
+    SQUID_SERVICE="squid"
+    
+    # Check if Squid is already installed
+    if command -v squid &> /dev/null; then
+        print_success "Squid is already installed, skipping installation"
+        return 0
+    fi
+    
     print_status "Installing Squid proxy server..."
     
     if [[ "$OS" == *"Ubuntu"* ]] || [[ "$OS" == *"Debian"* ]]; then
         sudo apt-get update
         sudo apt-get install -y squid
-        SQUID_CONFIG="/etc/squid/squid.conf"
-        SQUID_SERVICE="squid"
     elif [[ "$OS" == *"CentOS"* ]] || [[ "$OS" == *"Red Hat"* ]] || [[ "$OS" == *"Rocky"* ]] || [[ "$OS" == *"AlmaLinux"* ]]; then
         if command -v dnf &> /dev/null; then
             dnf install -y squid
         else
             yum install -y squid
         fi
-        SQUID_CONFIG="/etc/squid/squid.conf"
-        SQUID_SERVICE="squid"
     elif [[ "$OS" == *"Fedora"* ]]; then
         dnf install -y squid
-        SQUID_CONFIG="/etc/squid/squid.conf"
-        SQUID_SERVICE="squid"
     elif [[ "$OS" == *"SUSE"* ]] || [[ "$OS" == *"openSUSE"* ]]; then
         zypper install -y squid
-        SQUID_CONFIG="/etc/squid/squid.conf"
-        SQUID_SERVICE="squid"
     elif [[ "$OS" == *"Arch"* ]]; then
         pacman -Sy --noconfirm squid
-        SQUID_CONFIG="/etc/squid/squid.conf"
-        SQUID_SERVICE="squid"
     elif [[ "$OS" == *"Alpine"* ]]; then
         apk update
         apk add squid
-        SQUID_CONFIG="/etc/squid/squid.conf"
-        SQUID_SERVICE="squid"
     else
         print_error "Unsupported operating system: $OS"
         print_warning "Please install Squid manually and run this script again"
@@ -139,14 +137,93 @@ request_header_access Cache-Control deny all
 request_header_access X-Cache deny all
 request_header_access X-Cache-Lookup deny all
 
-# 允许所有访问
-http_access allow all
+# 用户认证配置
+auth_param basic program /usr/lib/squid/basic_ncsa_auth /etc/squid/passwd
+auth_param basic children 5
+auth_param basic realm Squid Proxy Authentication
+auth_param basic credentialsttl 2 hours
+
+# 定义需要认证的ACL
+acl authenticated proxy_auth REQUIRED
+
+# 只允许认证用户访问（拒绝开放代理）
+http_access allow authenticated
+http_access deny all
 
 # 缓存目录（如果目录不存在会自动创建）
 cache_dir ufs /var/spool/squid 100 16 256
 EOF
     
     print_success "Squid configuration updated"
+}
+
+# Setup authentication - create password file
+setup_auth() {
+    print_status "Setting up proxy authentication..."
+    
+    # Install htpasswd tool if not available
+    if ! command -v htpasswd &> /dev/null; then
+        print_status "Installing htpasswd tool..."
+        if [[ "$OS" == *"Ubuntu"* ]] || [[ "$OS" == *"Debian"* ]]; then
+            apt-get install -y apache2-utils
+        elif [[ "$OS" == *"CentOS"* ]] || [[ "$OS" == *"Red Hat"* ]] || [[ "$OS" == *"Rocky"* ]] || [[ "$OS" == *"AlmaLinux"* ]] || [[ "$OS" == *"Fedora"* ]]; then
+            if command -v dnf &> /dev/null; then
+                dnf install -y httpd-tools
+            else
+                yum install -y httpd-tools
+            fi
+        elif [[ "$OS" == *"SUSE"* ]] || [[ "$OS" == *"openSUSE"* ]]; then
+            zypper install -y apache2-utils
+        elif [[ "$OS" == *"Arch"* ]]; then
+            pacman -Sy --noconfirm apache
+        elif [[ "$OS" == *"Alpine"* ]]; then
+            apk add apache2-utils
+        fi
+    fi
+    
+    # Find the correct path for basic_ncsa_auth
+    AUTH_PROGRAM=""
+    for path in /usr/lib/squid/basic_ncsa_auth /usr/lib64/squid/basic_ncsa_auth /usr/libexec/squid/basic_ncsa_auth /usr/lib/squid3/basic_ncsa_auth; do
+        if [[ -f "$path" ]]; then
+            AUTH_PROGRAM="$path"
+            break
+        fi
+    done
+    
+    if [[ -z "$AUTH_PROGRAM" ]]; then
+        print_error "Cannot find basic_ncsa_auth program"
+        print_warning "Authentication may not work properly"
+    else
+        # Update config with correct auth program path
+        sed -i "s|/usr/lib/squid/basic_ncsa_auth|$AUTH_PROGRAM|g" "$SQUID_CONFIG"
+        print_status "Using auth program: $AUTH_PROGRAM"
+    fi
+    
+    # Generate random password if not provided
+    PROXY_USER="${PROXY_USER:-proxyuser}"
+    PROXY_PASS="${PROXY_PASS:-$(openssl rand -base64 12)}"
+    
+    # Create password file
+    htpasswd -cb /etc/squid/passwd "$PROXY_USER" "$PROXY_PASS"
+    chmod 640 /etc/squid/passwd
+    
+    # Set proper ownership
+    if id "squid" &>/dev/null; then
+        chown root:squid /etc/squid/passwd
+    elif id "proxy" &>/dev/null; then
+        chown root:proxy /etc/squid/passwd
+    fi
+    
+    print_success "Authentication setup completed"
+    print_status "Proxy Username: $PROXY_USER"
+    print_status "Proxy Password: $PROXY_PASS"
+    
+    # Save credentials to file for reference
+    echo "Proxy Credentials (created on $(date))" > /etc/squid/proxy_credentials.txt
+    echo "Username: $PROXY_USER" >> /etc/squid/proxy_credentials.txt
+    echo "Password: $PROXY_PASS" >> /etc/squid/proxy_credentials.txt
+    chmod 600 /etc/squid/proxy_credentials.txt
+    print_status "Credentials saved to /etc/squid/proxy_credentials.txt"
 }
 
 # Create cache directory and set permissions
@@ -240,6 +317,8 @@ test_squid() {
 
 # Display final information
 show_info() {
+    local SERVER_IP=$(hostname -I | awk '{print $1}')
+    
     echo
     echo "=============================================="
     print_success "Squid Proxy Installation Completed!"
@@ -250,9 +329,19 @@ show_info() {
     echo "  - Configuration: $SQUID_CONFIG"
     echo "  - Cache Directory: /var/spool/squid"
     echo
+    print_warning "AUTHENTICATION ENABLED (Proxy is NOT open)"
+    echo "  - Username: $PROXY_USER"
+    echo "  - Password: $PROXY_PASS"
+    echo "  - Credentials file: /etc/squid/proxy_credentials.txt"
+    echo
     echo "Usage Examples:"
-    echo "  - HTTP Proxy: http://$(hostname -I | awk '{print $1}'):5566"
-    echo "  - Test with curl: curl -x http://$(hostname -I | awk '{print $1}'):5566 http://httpbin.org/ip"
+    echo "  - HTTP Proxy: http://$PROXY_USER:$PROXY_PASS@$SERVER_IP:5566"
+    echo "  - Test with curl:"
+    echo "    curl -x http://$PROXY_USER:$PROXY_PASS@$SERVER_IP:5566 http://httpbin.org/ip"
+    echo "    curl --proxy-user $PROXY_USER:$PROXY_PASS -x http://$SERVER_IP:5566 http://httpbin.org/ip"
+    echo
+    echo "Add more users:"
+    echo "  htpasswd /etc/squid/passwd newusername"
     echo
     echo "Service Management:"
     echo "  - Start:   systemctl start $SQUID_SERVICE"
@@ -263,7 +352,7 @@ show_info() {
     echo "Configuration file: $SQUID_CONFIG"
     echo "Log files: /var/log/squid/"
     echo
-    print_warning "Remember to configure your client applications to use this proxy!"
+    print_warning "Remember to configure your client applications with the proxy credentials!"
     echo
 }
 
@@ -279,6 +368,7 @@ main() {
     install_squid
     backup_config
     configure_squid
+    setup_auth
     setup_cache
     configure_firewall
     start_squid
